@@ -42,7 +42,7 @@ app.get('/2fa/setup', async (req: Request, res: Response): Promise<void> => {
             <body>
                 <h1>Scan QR Code</h1>
                 <img src="${qrCodeUrl}" />
-                <p>Manuel Code: <strong>${secret.base32}</strong></p>
+                <p>Secret: <strong>${secret.base32}</strong></p>
                 <form action="/2fa/verify" method="get">
                     <input type="hidden" name="username" value="${username}" />
                     <input type="text" name="token" placeholder="Enter OTP" required />
