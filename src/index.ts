@@ -18,7 +18,7 @@ const users: Record<string, User> = {};
 
 // 2FA Kodu oluşturma
 app.get('/2fa/setup', async (req: Request, res: Response): Promise<void> => {
-    const { username } = req.query as { username: string };  // query parametrelerinden alıyoruz
+    const username = req.query.username as string;  // query parametrelerinden alıyoruz
     if (!username) {
         res.status(400).json({ error: 'Kullanıcı adı gerekli' });
         return;
@@ -65,8 +65,9 @@ app.get('/2fa/setup', async (req: Request, res: Response): Promise<void> => {
 
 // 2FA Doğrulama
 app.get('/2fa/verify', (req: Request, res: Response): void => {
-    const { username, token } = req.query as { username: string; token: string };  // query parametrelerinden alıyoruz
-    if (!username || !token) {
+    const { username, token, manualCode } = req.query as { username: string; token: string; manualCode?: string };
+    
+    if (!username || (!token && !manualCode)) {
         res.status(400).json({ error: 'Eksik bilgi' });
         return;
     }
@@ -77,7 +78,15 @@ app.get('/2fa/verify', (req: Request, res: Response): void => {
         return;
     }
 
-    // OTP doğrulaması
+    // İlk doğrulama: Manuel kod veya token ile doğrulama yapılabilir
+    if (manualCode && manualCode === user.secret) {
+        user.verified = true;
+        const authToken: string = jwt.sign({ username }, SECRET, { expiresIn: '1h' });
+        res.json({ success: true, token: authToken });
+        return;
+    }
+
+    // İkinci doğrulama: OTP ile doğrulama yapılır
     if (user.otpTokens.includes(token)) {
         // Geçerli kod ise, bir daha kullanılamaz hale getir
         user.otpTokens = user.otpTokens.filter((t) => t !== token);
