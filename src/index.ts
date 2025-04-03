@@ -11,6 +11,7 @@ const SECRET: string = 'your_jwt_secret'; // Güvenli bir şekilde saklanmalı!
 interface User {
     secret: string;
     verified: boolean;
+    otpTokens: string[];
 }
 
 const users: Record<string, User> = {};
@@ -24,8 +25,23 @@ app.get('/2fa/setup', async (req: Request, res: Response): Promise<void> => {
     }
 
     const secret: GeneratedSecret = speakeasy.generateSecret({ length: 20 });
-    users[username as string] = { secret: secret.base32, verified: false };
+    users[username as string] = { 
+        secret: secret.base32, 
+        verified: false, 
+        otpTokens: [] 
+    };
     
+    // 8 adet tek seferlik giriş kodu oluşturma
+    const otpTokens = [];
+    for (let i = 0; i < 8; i++) {
+        const token = speakeasy.totp({
+            secret: secret.base32,
+            encoding: 'base32',
+        });
+        otpTokens.push(token);
+    }
+    users[username as string].otpTokens = otpTokens;
+
     const otpauth_url: string = secret.otpauth_url || '';
     const qrCodeUrl: string = await qrcode.toDataURL(otpauth_url);
     
@@ -38,6 +54,10 @@ app.get('/2fa/setup', async (req: Request, res: Response): Promise<void> => {
                 <h1>QR Kodunu Tara</h1>
                 <img src="${qrCodeUrl}" />
                 <p>Veya bu kodu manuel olarak gir: <strong>${secret.base32}</strong></p>
+                <p>Kullanıcıya 8 adet tek seferlik giriş kodu verilmiştir:</p>
+                <ul>
+                    ${otpTokens.map((token) => `<li>${token}</li>`).join('')}
+                </ul>
             </body>
         </html>
     `);
@@ -57,25 +77,18 @@ app.get('/2fa/verify', (req: Request, res: Response): void => {
         return;
     }
 
-    const verified: boolean = speakeasy.totp.verify({
-        secret: user.secret,
-        encoding: 'base32',
-        token
-    });
-    
-    if (verified) {
+    // OTP doğrulaması
+    if (user.otpTokens.includes(token)) {
+        // Geçerli kod ise, bir daha kullanılamaz hale getir
+        user.otpTokens = user.otpTokens.filter((t) => t !== token);
+
         user.verified = true;
         const authToken: string = jwt.sign({ username }, SECRET, { expiresIn: '1h' });
         res.json({ success: true, token: authToken });
         return;
     }
     
-    res.status(400).json({ error: 'Geçersiz kod' });
-});
-
-app.get("/", (req: Request, res: Response): void => {
-    //send users
-    res.json(users);
+    res.status(400).json({ error: 'Geçersiz veya kullanılmış kod' });
 });
 
 app.listen(3000, (): void => {
