@@ -25,22 +25,24 @@ app.get('/2fa/setup', async (req: Request, res: Response): Promise<void> => {
     }
 
     const secret: GeneratedSecret = speakeasy.generateSecret({ length: 20 });
-    users[username as string] = { 
+    users[username] = { 
         secret: secret.base32, 
         verified: false, 
         otpTokens: [] 
     };
     
-    // 8 adet tek seferlik giriş kodu oluşturma
-    const otpTokens = [];
+    // 8 adet farklı tek seferlik giriş kodu oluşturma
+    const otpTokens: string[] = [];
     for (let i = 0; i < 8; i++) {
-        const token = speakeasy.totp({
+        const token: string = speakeasy.totp({
             secret: secret.base32,
             encoding: 'base32',
+            digits: 8,  // 8 haneli OTP kodları
+            time: Math.floor(Date.now() / 1000) + i * 1000  // Her çağrıda farklı zaman kullan
         });
         otpTokens.push(token);
     }
-    users[username as string].otpTokens = otpTokens;
+    users[username].otpTokens = otpTokens;
 
     const otpauth_url: string = secret.otpauth_url || '';
     const qrCodeUrl: string = await qrcode.toDataURL(otpauth_url);
@@ -56,7 +58,7 @@ app.get('/2fa/setup', async (req: Request, res: Response): Promise<void> => {
                 <p>Veya bu kodu manuel olarak gir: <strong>${secret.base32}</strong></p>
                 <p>Kullanıcıya 8 adet tek seferlik giriş kodu verilmiştir:</p>
                 <ul>
-                    ${otpTokens.map((token) => `<li>${token}</li>`).join('')}
+                    ${otpTokens.map((token) => `<li>${token.slice(0, 4) + '-' + token.slice(4, 8)}}</li>`).join('')}
                 </ul>
             </body>
         </html>
@@ -72,7 +74,7 @@ app.get('/2fa/verify', (req: Request, res: Response): void => {
         return;
     }
     
-    const user: User | undefined = users[username as string];
+    const user: User | undefined = users[username];
     if (!user) {
         res.status(404).json({ error: 'Kullanıcı bulunamadı' });
         return;
@@ -98,6 +100,10 @@ app.get('/2fa/verify', (req: Request, res: Response): void => {
     }
     
     res.status(400).json({ error: 'Geçersiz veya kullanılmış kod' });
+});
+
+app.get('/', (req: Request, res: Response): void => {
+    res.send(users);
 });
 
 app.listen(3000, (): void => {
