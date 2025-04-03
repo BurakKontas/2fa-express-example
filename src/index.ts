@@ -2,11 +2,12 @@ import express, { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import speakeasy, { GeneratedSecret } from 'speakeasy';
 import qrcode from 'qrcode';
+import { randomUUID } from 'crypto';
 
 const app = express();
 app.use(express.json());
 
-const SECRET: string = 'your_jwt_secret'; // Güvenli bir şekilde saklanmalı!
+const SECRET: string = randomUUID();
 
 interface User {
     secret: string;
@@ -16,11 +17,10 @@ interface User {
 
 const users: Record<string, User> = {};
 
-// 2FA Kodu oluşturma
 app.get('/2fa/setup', async (req: Request, res: Response): Promise<void> => {
-    const username = req.query.username as string;  // query parametrelerinden alıyoruz
+    const username = req.query.username as string;
     if (!username) {
-        res.status(400).json({ error: 'Kullanıcı adı gerekli' });
+        res.status(400).json({ error: 'Username required' });
         return;
     }
 
@@ -30,19 +30,6 @@ app.get('/2fa/setup', async (req: Request, res: Response): Promise<void> => {
         verified: false, 
         otpTokens: [] 
     };
-    
-    // 8 adet farklı tek seferlik giriş kodu oluşturma
-    const otpTokens: string[] = [];
-    for (let i = 0; i < 8; i++) {
-        const token: string = speakeasy.totp({
-            secret: secret.base32,
-            encoding: 'base32',
-            digits: 8,  // 8 haneli OTP kodları
-            time: Math.floor(Date.now() / 1000) + i * 1000  // Her çağrıda farklı zaman kullan
-        });
-        otpTokens.push(token);
-    }
-    users[username].otpTokens = otpTokens;
 
     const otpauth_url: string = secret.otpauth_url || '';
     const qrCodeUrl: string = await qrcode.toDataURL(otpauth_url);
@@ -50,47 +37,62 @@ app.get('/2fa/setup', async (req: Request, res: Response): Promise<void> => {
     res.send(`
         <html>
             <head>
-                <title>2FA Kurulumu</title>
+                <title>2FA Setup</title>
             </head>
             <body>
-                <h1>QR Kodunu Tara</h1>
+                <h1>Scan QR Code</h1>
                 <img src="${qrCodeUrl}" />
-                <p>Veya bu kodu manuel olarak gir: <strong>${secret.base32}</strong></p>
-                <p>Kullanıcıya 8 adet tek seferlik giriş kodu verilmiştir:</p>
-                <ul>
-                    ${otpTokens.map((token) => `<li>${token.slice(0, 4) + '-' + token.slice(4, 8)}}</li>`).join('')}
-                </ul>
+                <p>Manuel Code: <strong>${secret.base32}</strong></p>
+                <form action="/2fa/verify" method="get">
+                    <input type="hidden" name="username" value="${username}" />
+                    <input type="text" name="token" placeholder="Enter OTP" required />
+                    <button type="submit">Verify</button>
+                </form>
             </body>
         </html>
     `);
 });
 
-// 2FA Doğrulama
 app.get('/2fa/verify', (req: Request, res: Response): void => {
     const { username, token } = req.query as { username: string; token: string };
     
     if (!username || !token) {
-        res.status(400).json({ error: 'Eksik bilgi' });
+        res.status(400).json({ error: 'Missing information' });
         return;
     }
     
     const user: User | undefined = users[username];
     if (!user) {
-        res.status(404).json({ error: 'Kullanıcı bulunamadı' });
+        res.status(404).json({ error: 'Invalid user' });
         return;
     }
 
-    // 1. Adım: İlk doğrulama (manuel kod ile kontrol)
-    if (token === user.secret) {
+    var otpVerified = verifyOtp(username, token);
+    if (otpVerified) {
+        var response = {};
+
+        if(!user.verified) {
+            const otpTokens: string[] = [];
+            for (let i = 0; i < 8; i++) {
+                const token: string = speakeasy.totp({
+                    secret: user.secret,
+                    encoding: 'base32',
+                    digits: 6,
+                    time: Math.floor(Date.now() / 1000) + i * 1000
+                });
+                otpTokens.push(token);
+            }
+
+            user.otpTokens = otpTokens;
+
+            response = {...response, otpTokens};
+        }
+
         user.verified = true;
         const authToken: string = jwt.sign({ username }, SECRET, { expiresIn: '1h' });
-        res.json({ success: true, token: authToken });
+        res.json({ success: true, token: authToken, ...response });
         return;
-    }
-
-    // 2. Adım: OTP kodu doğrulaması
-    if (user.otpTokens.includes(token)) {
-        // Geçerli kod ise, bir daha kullanılamaz hale getir
+    } else if (user.otpTokens.includes(token)) {
         user.otpTokens = user.otpTokens.filter((t) => t !== token);
 
         user.verified = true;
@@ -99,7 +101,7 @@ app.get('/2fa/verify', (req: Request, res: Response): void => {
         return;
     }
     
-    res.status(400).json({ error: 'Geçersiz veya kullanılmış kod' });
+    res.status(400).json({ error: 'Invalid or used code.' });
 });
 
 app.get('/', (req: Request, res: Response): void => {
@@ -109,3 +111,21 @@ app.get('/', (req: Request, res: Response): void => {
 app.listen(3000, (): void => {
     console.log('Server running on http://localhost:3000');
 });
+
+function verifyOtp(username: string, code: string): boolean {
+    const user = users[username];
+
+    if (!user) {
+        console.error('No user');
+        return false;
+    }
+
+    const isValid = speakeasy.totp.verify({
+        secret: user.secret,
+        encoding: 'base32',
+        token: code,
+        window: 1
+    });
+
+    return isValid;
+}
